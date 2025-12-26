@@ -1,0 +1,1426 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Cloud, Sun, Check, ChevronRight, AlertCircle, BarChart3, Clock, Smartphone, RotateCcw, ClipboardCheck, ListTodo, ArrowLeft, Printer, FileText, HelpCircle, X, CornerDownRight, CheckCircle2, Sparkles, Tablet, Monitor, Mic, Download, Loader2 } from 'lucide-react';
+
+// ==========================================
+// Constants & Configuration
+// ==========================================
+const STORAGE_KEY = 'productivity_app_state_v14';
+const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const FONT_URL = 'https://raw.githubusercontent.com/google/fonts/main/ofl/zenkakugothicnew/ZenKakuGothicNew-Regular.ttf';
+const FONT_NAME = "ZenKakuGothicNew-Regular";
+
+const INITIAL_STATE = {
+  phase: 1, // 1: Intro, 2: Buster, 3: Check, 4: Result/Promo
+  viewMode: 'wizard', // 'wizard' or 'checklist'
+  misunderstandingsCleared: [false, false, false],
+  checkSheetAnswers: {
+    serviceType: null,
+    wifi: null,
+    devices: {
+      sensor: false,
+      income: false,
+      record: false,
+    },
+  },
+  detailedChecklist: {} 
+};
+
+// ==========================================
+// Data Definitions
+// ==========================================
+const TARGET_SERVICES = [
+  {
+    category: '1. 施設系サービス',
+    items: [
+      '介護老人福祉施設（特別養護老人ホーム）',
+      '地域密着型介護老人福祉施設入所者生活介護（地域密着型特養）',
+      '介護老人保健施設（老健）',
+      '介護医療院'
+    ]
+  },
+  {
+    category: '2. 居住系サービス',
+    items: [
+      '特定施設入居者生活介護（介護付き有料老人ホーム等）',
+      '地域密着型特定施設入居者生活介護',
+      '認知症対応型共同生活介護（グループホーム）'
+    ]
+  },
+  {
+    category: '3. 多機能系サービス',
+    items: [
+      '小規模多機能型居宅介護',
+      '看護小規模多機能型居宅介護（複合型サービス）'
+    ]
+  },
+  {
+    category: '4. 短期入所系サービス',
+    items: [
+      '短期入所生活介護（ショートステイ）',
+      '短期入所療養介護（医療型ショートステイ）'
+    ]
+  }
+];
+
+const QUESTIONS = [
+  {
+    id: 0,
+    cloudText: 'Q1. 委員会は毎月開催が必要？',
+    sunText: 'いいえ！3ヶ月に1回でOK！',
+    detail: '形骸化を防ぐため、3ヶ月に1回以上でよいとされています。他の会議との同時開催も可能です。'
+  },
+  {
+    id: 1,
+    cloudText: 'Q2. ロボットを全室に入れないとダメ？',
+    sunText: 'まずは「1台」からでOK！',
+    detail: '加算（Ⅱ）なら、見守り・インカム・記録ソフトのうち1つ以上を導入すれば算定可能です。'
+  },
+  {
+    id: 2,
+    cloudText: 'Q3. 膨大な書類提出が必要？',
+    sunText: '実績報告は年に1回だけ！',
+    detail: '厚労省への報告は毎月ではなく、事業年度ごとに1回、Web上で行います。'
+  }
+];
+
+const FULL_CHECKLIST_DATA = [
+  {
+    category: "【1. 事前準備・必須環境】",
+    description: null,
+    items: [
+      {
+        id: "pre_1",
+        label: "対象サービスの確認",
+        detail: "施設系（特養、老健、医療院等）、居住系（特定施設、グループホーム等）、短期入所系、多機能系サービスのいずれかですか？（※通所・訪問は対象外）",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.6,"
+      },
+      {
+        id: "pre_2",
+        label: "「GビズIDプライム」アカウントの取得",
+        detail: "※実績報告はLIFEではなく、厚労省の「生産性向上推進体制加算実績報告システム」を使用します。ログインには「GビズIDプライム」が必須です。",
+        source: "介護保険最新情報Vol.1315「生産性向上推進体制加算を算定する事業所における生産性向上の取組に関する実績データの厚生労働省への報告について」"
+      }
+    ]
+  },
+  {
+    category: "【2. 加算（Ⅱ）】月10単位（体制整備・データ提出）",
+    description: "要件：機器を1種以上導入し、委員会活動とデータ提出を行うこと。成果（時間の短縮等）は問われません。",
+    items: [
+      {
+        id: "ii_1_1",
+        label: "① 委員会の設置・運営（3ヶ月に1回以上）",
+        detail: "「生産性向上委員会（利用者の安全並びに介護サービスの質の確保及び職員の負担軽減に資する方策を検討するための委員会）」を設置し、3ヶ月に1回以上開催していますか？",
+        source: "介護保険最新情報Vol.1236「生産性向上推進体制加算に関する基本的考え方並びに事務処理手順及び様式例等の提示について」（以下、「解釈通知」）,"
+      },
+      {
+        id: "ii_1_2",
+        label: "構成員の要件",
+        detail: "構成員に「管理者」だけでなく「ケアを行う職員（現場職員）」を含めていますか？",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.9"
+      },
+      {
+        id: "ii_1_3",
+        label: "検討項目の確認",
+        detail: "委員会で、以下の4項目すべてについて検討・確認を行っていますか？",
+        subItems: [
+          { id: "ii_1_3_1", text: "利用者の安全・ケアの質の確保（ヒヤリハット分析など）" },
+          { id: "ii_1_3_2", text: "職員の負担軽減・勤務状況への配慮（ストレスチェックなど）" },
+          { id: "ii_1_3_3", text: "介護機器の定期的な点検（メーカーと連携した点検体制など）" },
+          { id: "ii_1_3_4", text: "職員に対する研修（機器操作、役割分担など）" }
+        ],
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.10,"
+      },
+      {
+        id: "ii_2",
+        label: "② テクノロジー機器の導入（いずれか1つ以上）",
+        detail: "以下の①〜③の機器のうち、いずれか1つ以上を導入していますか？",
+        subItems: [
+          { id: "ii_2_1", text: "① 見守り機器（離床検知・外部通信／1台以上）※（Ⅱ）の場合" },
+          { id: "ii_2_2", text: "② インカム等（スマホチャット等／同一時間帯の全介護職員）" },
+          { id: "ii_2_3", text: "③ 介護記録ソフト等（転記不要・一元管理）" }
+        ],
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.12"
+      },
+      {
+        id: "ii_3",
+        label: "③ 業務改善の実施",
+        detail: "厚労省の「生産性向上ガイドライン」に基づいた改善活動を行っていますか？",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.6,"
+      },
+      {
+        id: "ii_4_1",
+        label: "④ データ提出：利用者の満足度・QOL",
+        detail: "利用者の満足度・QOL（WHO-5、生活・認知機能尺度／対象：5名程度）",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.14"
+      },
+      {
+        id: "ii_4_2",
+        label: "④ データ提出：職員の総業務時間・残業時間",
+        detail: "職員の総業務時間・残業時間（対象：機器導入フロアの介護職員）※原則として「毎年10月」（初年度は算定開始月）の実績を用います。",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.14"
+      },
+      {
+        id: "ii_4_3",
+        label: "④ データ提出：年次有給休暇の取得状況",
+        detail: "年次有給休暇の取得状況（対象：機器導入フロアの介護職員）",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.14"
+      }
+    ]
+  },
+  {
+    category: "【3. 加算（Ⅰ）】月100単位（成果の確認・高度な運用）",
+    description: "要件：（Ⅱ）の要件に加え、3種全ての機器導入、全職員対象のデータ測定、成果の実証が必要。",
+    items: [
+      {
+        id: "i_1_1",
+        label: "① テクノロジー機器の「3種すべて」の導入",
+        detail: "以下の①〜③をすべて導入・運用していますか？",
+        subItems: [
+          { id: "i_1_1_1", text: "① 見守り機器： 全ての居室に設置している（※利用者の意向で停止している場合は可）。" },
+          { id: "i_1_1_2", text: "② インカム等： 同一時間帯の全ての介護職員が使用している。" },
+          { id: "i_1_1_3", text: "③ 介護記録ソフト： 記録・保存・活用を一元管理できている。" }
+        ],
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.12,"
+      },
+      {
+        id: "i_2",
+        label: "② 職員間の役割分担（タスクシェア・シフト）",
+        detail: "介護助手（周辺業務を行う者）の活用や業務の外部委託など、役割分担を行っていますか？",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.13,"
+      },
+      {
+        id: "i_3_1",
+        label: "③ 期間の要件（重要）",
+        detail: "機器導入後、生産性向上の取組を「3ヶ月以上」継続しましたか？",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.23-24,"
+      },
+      {
+        id: "i_3_2",
+        label: "③ 成果確認",
+        detail: "機器導入前後のデータを比較し、以下の「成果」を確認しましたか？",
+        subItems: [
+          { id: "i_3_2_1", text: "利用者の満足度等： 悪化していない（維持または向上）。" },
+          { id: "i_3_2_2", text: "総業務時間・残業時間： 短縮している。" },
+          { id: "i_3_2_3", text: "年次有給休暇： 維持または増加している。" }
+        ],
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.23-24,"
+      },
+      {
+        id: "i_4",
+        label: "④ データ測定対象の拡大と追加項目",
+        detail: "（Ⅱ）と異なり、「全ての介護職員」が対象になります。",
+        subItems: [
+          { id: "i_4_1", text: "職員の総業務時間・残業時間（対象：全ての介護職員）" },
+          { id: "i_4_2", text: "年次有給休暇の取得状況（対象：全ての介護職員）" },
+          { id: "i_4_3", text: "【追加】職員の心理的負担（SRS-18、モチベーション変化／対象：全ての介護職員）" },
+          { id: "i_4_4", text: "【追加】タイムスタディ調査（5日間／対象：複数人の職員）" }
+        ],
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.14-15,"
+      }
+    ]
+  },
+  {
+    category: "【4. 毎年のルーチン（維持管理）】",
+    description: null,
+    items: [
+      {
+        id: "routine_1",
+        label: "実績データの提出（年1回）",
+        detail: "年に1回、厚労省のシステムへ実績データを提出する。※令和6年度分の提出期限は令和7年3月31日までです。",
+        source: "介護保険最新情報Vol.1315「生産性向上推進体制加算を算定する事業所における生産性向上の取組に関する実績データの厚生労働省への報告について」"
+      },
+      {
+        id: "routine_2",
+        label: "委員会の継続開催",
+        detail: "委員会を3ヶ月に1回以上継続開催し、議事録等の記録を保存する。",
+        source: "社保審－介護給付費分科会 第239回資料「令和６年度介護報酬改定 生産性向上推進体制加算について」P.10"
+      }
+    ]
+  }
+];
+
+// ==========================================
+// Utilities
+// ==========================================
+
+const loadScript = (src) => {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.body.appendChild(script);
+  });
+};
+
+const arrayBufferToBase64 = (buffer) => {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+};
+
+// ==========================================
+// Custom Hooks
+// ==========================================
+
+// --- usePDFGenerator Hook ---
+// Handles font loading and PDF generation logic using jsPDF
+function usePDFGenerator() {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPdfReady, setIsPdfReady] = useState(false);
+
+  useEffect(() => {
+    loadScript(JSPDF_URL).then(() => {
+      setIsPdfReady(true);
+    }).catch(err => console.error("Failed to load PDF library", err));
+  }, []);
+
+  const generatePDF = async (data, checkedItems) => {
+    if (!window.jspdf) {
+      alert("PDF生成ライブラリの読み込み中です。少々お待ちください。");
+      return;
+    }
+
+    setIsGenerating(true);
+
+    try {
+      // 1. Fetch Japanese Font
+      const fontRes = await fetch(FONT_URL);
+      if (!fontRes.ok) throw new Error("Failed to fetch font");
+      const fontBlob = await fontRes.blob();
+      
+      const fontBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64data = reader.result.split(',')[1];
+            resolve(base64data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(fontBlob);
+      });
+
+      // 2. Initialize jsPDF
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+
+      // Set Metadata
+      doc.setProperties({ title: "生産性向上推進体制加算 取得チェックリスト" });
+
+      // 3. Add & Set Font
+      doc.addFileToVFS("ZenKakuGothicNew-Regular.ttf", fontBase64);
+      doc.addFont("ZenKakuGothicNew-Regular.ttf", FONT_NAME, "normal");
+      doc.setFont(FONT_NAME);
+
+      // 4. Layout Constants
+      const margin = 15;
+      const pageWidth = 210;
+      const pageHeight = 297;
+      const contentWidth = pageWidth - (margin * 2);
+      const bottomLimit = pageHeight - margin;
+      let y = margin;
+      
+      const checkColor = [14, 165, 233]; // Sky-500
+      const grayColor = [148, 163, 184]; // Slate-400
+
+      // Helper: Check Page Break
+      const checkPageBreak = (heightNeeded) => {
+        if (y + heightNeeded > bottomLimit) {
+          doc.addPage();
+          y = margin;
+          return true;
+        }
+        return false;
+      };
+
+      // Helper: Calculate text height
+      const getTextHeight = (text, fontSize, maxWidth) => {
+        if (!text) return 0;
+        doc.setFontSize(fontSize);
+        const lines = doc.splitTextToSize(text, maxWidth);
+        return lines.length * (fontSize * 0.3527 * 1.5);
+      };
+
+      // 5. Draw Header
+      doc.setFontSize(22);
+      doc.setTextColor(0, 0, 0);
+      doc.text("生産性向上推進体制加算 取得チェックリスト", margin, y + 8);
+      y += 18;
+
+      doc.setFontSize(10);
+      doc.setTextColor(...grayColor);
+      doc.text("本チェックリストは厚生労働省の資料に基づき作成されています。", margin, y);
+      y += 15;
+
+      // 6. Draw Content Loop
+      for (const section of data) {
+        // Section Header Height Calc
+        const secTitleHeight = 12; 
+        let descHeight = 0;
+        if(section.description) {
+            descHeight = getTextHeight(section.description, 9, contentWidth) + 5;
+        }
+        checkPageBreak(secTitleHeight + descHeight + 10);
+
+        // Section Background & Title
+        doc.setFillColor(240, 249, 255); 
+        doc.rect(margin, y, contentWidth, 12, 'F');
+        doc.setFillColor(...checkColor);
+        doc.rect(margin, y, 1.5, 12, 'F');
+
+        doc.setFontSize(14);
+        doc.setTextColor(30, 58, 138); 
+        doc.text(section.category, margin + 4, y + 8);
+        y += 18;
+
+        if(section.description) {
+           doc.setFontSize(9);
+           doc.setTextColor(...checkColor);
+           const descLines = doc.splitTextToSize(section.description, contentWidth);
+           doc.text(descLines, margin, y);
+           y += descHeight;
+        } else {
+           y += 5;
+        }
+
+        // Items Loop
+        for (const item of section.items) {
+           const isChecked = checkedItems[item.id];
+           
+           // Calculate total height needed for item
+           const titleH = getTextHeight(item.label, 11, contentWidth - 10) + 2;
+           const detailH = getTextHeight(item.detail, 9, contentWidth - 10) + 2;
+           let subItemsH = 0;
+           if (item.subItems) {
+               for (const sub of item.subItems) {
+                   subItemsH += getTextHeight(sub.text, 9, contentWidth - 25) + 3;
+               }
+               if (item.subItems.length > 0) subItemsH += 2;
+           }
+           let sourceH = 0;
+           if (item.source) {
+               sourceH = getTextHeight(`出典: ${item.source}`, 7, contentWidth - 10) + 3;
+           }
+
+           // Check Page Break for Item
+           checkPageBreak(titleH + detailH + subItemsH + sourceH + 10);
+           
+           // Checkbox
+           doc.setDrawColor(203, 213, 225); 
+           doc.setFillColor(255, 255, 255);
+           if (isChecked) {
+             doc.setDrawColor(...checkColor);
+             doc.setFillColor(...checkColor);
+           }
+           doc.roundedRect(margin, y, 6, 6, 1, 1, 'FD');
+           
+           if (isChecked) {
+             doc.setDrawColor(255, 255, 255);
+             doc.setLineWidth(0.8);
+             doc.line(margin + 1.5, y + 3, margin + 2.5, y + 4.5); 
+             doc.line(margin + 2.5, y + 4.5, margin + 4.5, y + 1.5);
+           }
+
+           // Title
+           doc.setFontSize(11);
+           doc.setTextColor(isChecked ? 21 : 51, isChecked ? 90 : 65, isChecked ? 153 : 85);
+           const titleLines = doc.splitTextToSize(item.label, contentWidth - 10);
+           doc.text(titleLines, margin + 10, y + 4.5);
+           y += titleH + 1;
+
+           // Detail
+           doc.setFontSize(9);
+           doc.setTextColor(71, 85, 105);
+           const detailLines = doc.splitTextToSize(item.detail, contentWidth - 10);
+           doc.text(detailLines, margin + 10, y);
+           y += detailH + 2;
+
+           // SubItems
+           if (item.subItems) {
+             for (const sub of item.subItems) {
+                const isSubChecked = checkedItems[sub.id];
+                
+                doc.setDrawColor(203, 213, 225);
+                doc.setFillColor(255, 255, 255);
+                if (isSubChecked) {
+                  doc.setDrawColor(...checkColor);
+                  doc.setFillColor(56, 189, 248); 
+                }
+                doc.roundedRect(margin + 12, y, 4, 4, 0.5, 0.5, 'FD');
+
+                if (isSubChecked) {
+                  doc.setDrawColor(255, 255, 255);
+                  doc.line(margin + 13, y + 2, margin + 13.5, y + 3);
+                  doc.line(margin + 13.5, y + 3, margin + 15, y + 1);
+                }
+
+                doc.setFontSize(9);
+                doc.setTextColor(isSubChecked ? 148 : 51, isSubChecked ? 163 : 65, isSubChecked ? 184 : 85);
+                const subLines = doc.splitTextToSize(sub.text, contentWidth - 25);
+                doc.text(subLines, margin + 20, y + 3);
+                y += getTextHeight(sub.text, 9, contentWidth - 25) + 3;
+             }
+             y += 2;
+           }
+           
+           // Source
+           if (item.source) {
+             doc.setFontSize(7);
+             doc.setTextColor(...grayColor);
+             const sourceLines = doc.splitTextToSize(`出典: ${item.source}`, contentWidth - 10);
+             doc.text(sourceLines, margin + 10, y);
+             y += sourceH;
+           }
+           y += 4;
+        }
+        y += 6;
+      }
+
+      // 7. Output
+      const pdfBlob = doc.output('bloburl');
+      window.open(pdfBlob, '_blank');
+
+    } catch (error) {
+      console.error("PDF Gen Error", error);
+      alert("PDF生成中にエラーが発生しました。\n(日本語フォントの読み込みに失敗した可能性があります。通信環境を確認してください)");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return { isGenerating, isPdfReady, generatePDF };
+}
+
+// --- useAppState Hook ---
+function useAppState() {
+  const [state, setState] = useState(INITIAL_STATE);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setState(prev => ({ ...prev, ...parsed }));
+      } catch (e) {
+        console.error('Failed to parse saved state', e);
+      }
+    }
+    setIsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+  }, [state, isLoaded]);
+
+  const setPhase = (phase) => {
+    setState(prev => ({ ...prev, phase, viewMode: 'wizard' }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const goBack = () => {
+    if (state.phase > 1) {
+      setState(prev => ({ ...prev, phase: prev.phase - 1 }));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+  
+  const toggleViewMode = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setState(prev => ({ 
+      ...prev, 
+      viewMode: prev.viewMode === 'checklist' ? 'wizard' : 'checklist' 
+    }));
+  };
+
+  const clearMisunderstanding = (index) => {
+    const newCleared = [...state.misunderstandingsCleared];
+    newCleared[index] = true;
+    setState(prev => ({ ...prev, misunderstandingsCleared: newCleared }));
+  };
+
+  const updateAnswer = (key, value) => {
+    setState(prev => ({
+      ...prev,
+      checkSheetAnswers: { ...prev.checkSheetAnswers, [key]: value }
+    }));
+  };
+
+  const toggleDevice = (deviceKey) => {
+    setState(prev => ({
+      ...prev,
+      checkSheetAnswers: {
+        ...prev.checkSheetAnswers,
+        devices: {
+          ...prev.checkSheetAnswers.devices,
+          [deviceKey]: !prev.checkSheetAnswers.devices[deviceKey]
+        }
+      }
+    }));
+  };
+
+  const toggleChecklistItem = (id) => {
+    setState(prev => {
+      const newChecklist = { ...prev.detailedChecklist };
+      let targetItem = null;
+      let parentItem = null;
+
+      // Search for item and its parent
+      for (const section of FULL_CHECKLIST_DATA) {
+        for (const item of section.items) {
+          if (item.id === id) targetItem = item;
+          if (item.subItems) {
+            for (const subItem of item.subItems) {
+              if (subItem.id === id) {
+                targetItem = subItem;
+                parentItem = item;
+              }
+            }
+          }
+          if (targetItem) break;
+        }
+        if (targetItem) break;
+      }
+
+      if (!targetItem) return prev;
+
+      const nextValue = !newChecklist[id];
+      newChecklist[id] = nextValue;
+
+      // Logic: Parent -> Children
+      if (targetItem.subItems) {
+        targetItem.subItems.forEach(sub => {
+          newChecklist[sub.id] = nextValue;
+        });
+      }
+
+      // Logic: Child -> Parent
+      if (parentItem) {
+        const isOrLogic = parentItem.id === 'ii_2';
+        if (isOrLogic) {
+          const anyChecked = parentItem.subItems.some(sub => 
+            sub.id === id ? nextValue : newChecklist[sub.id]
+          );
+          newChecklist[parentItem.id] = anyChecked;
+        } else {
+          const allChecked = parentItem.subItems.every(sub => 
+            sub.id === id ? nextValue : newChecklist[sub.id]
+          );
+          newChecklist[parentItem.id] = allChecked;
+        }
+      }
+
+      return { ...prev, detailedChecklist: newChecklist };
+    });
+  };
+
+  const resetApp = () => {
+    setState(INITIAL_STATE);
+    localStorage.removeItem(STORAGE_KEY);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const calculateResult = useMemo(() => {
+    const { serviceType, wifi, devices } = state.checkSheetAnswers;
+    const deviceCount = Object.values(devices).filter(Boolean).length;
+    const hasAnyDevice = deviceCount >= 1;
+
+    if (serviceType === false) return 'B';
+    if (serviceType === true && wifi === true && hasAnyDevice) return 'S';
+    return 'A';
+  }, [state.checkSheetAnswers]);
+
+  const calculateProgress = useCallback((excludeIndex = null) => {
+    let total = 0;
+    let checked = 0;
+    FULL_CHECKLIST_DATA.forEach((section, index) => {
+      if (excludeIndex !== null && index === excludeIndex) return;
+      section.items.forEach(item => {
+        total++;
+        if (state.detailedChecklist[item.id]) checked++;
+        if (item.subItems) {
+          item.subItems.forEach(subItem => {
+            total++;
+            if (state.detailedChecklist[subItem.id]) checked++;
+          });
+        }
+      });
+    });
+    return total === 0 ? 0 : Math.round((checked / total) * 100);
+  }, [state.detailedChecklist]);
+
+  return {
+    state,
+    isLoaded,
+    actions: {
+      setPhase,
+      goBack,
+      toggleViewMode,
+      clearMisunderstanding,
+      updateAnswer,
+      toggleDevice,
+      toggleChecklistItem,
+      resetApp
+    },
+    computed: {
+      calculateResult,
+      progressII: calculateProgress(2),
+      progressI: calculateProgress(null)
+    }
+  };
+}
+
+// ==========================================
+// Main App Component
+// ==========================================
+export default function App() {
+  const { state, isLoaded, actions, computed } = useAppState();
+  const { isGenerating, isPdfReady, generatePDF } = usePDFGenerator();
+
+  if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-medium">Loading Application...</div>;
+
+  const mainContainerClass = state.viewMode === 'checklist' ? 'max-w-6xl' : 'max-w-2xl';
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 relative selection:bg-sky-100 selection:text-sky-800 overflow-x-hidden">
+      
+      {/* Background */}
+      <div className="fixed top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0 print:hidden">
+        <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-blue-100/50 blur-3xl opacity-60 animate-pulse-slow"></div>
+        <div className="absolute top-[20%] -right-[10%] w-[40%] h-[40%] rounded-full bg-orange-100/40 blur-3xl opacity-60 delay-1000 animate-pulse-slow"></div>
+        <div className="absolute bottom-[10%] left-[20%] w-[60%] h-[60%] rounded-full bg-indigo-50/50 blur-3xl opacity-50 delay-2000"></div>
+      </div>
+
+      <AppHeader 
+        viewMode={state.viewMode}
+        currentPhase={state.phase}
+        onToggleView={actions.toggleViewMode} 
+        onReset={actions.resetApp}
+        onBack={actions.goBack}
+        progressII={computed.progressII}
+        progressI={computed.progressI}
+      />
+
+      <main className={`${mainContainerClass} mx-auto px-4 pb-32 pt-28 md:pt-32 transition-all duration-500 ease-in-out relative z-10`}>
+        {state.viewMode === 'checklist' ? (
+          <DetailedChecklist 
+            data={FULL_CHECKLIST_DATA} 
+            checkedItems={state.detailedChecklist}
+            onToggle={actions.toggleChecklistItem}
+            onGeneratePDF={() => generatePDF(FULL_CHECKLIST_DATA, state.detailedChecklist)}
+            isPdfReady={isPdfReady}
+            isGenerating={isGenerating}
+          />
+        ) : (
+          <div className="transition-opacity duration-300 ease-in">
+            {state.phase === 1 && <Phase1_Intro onNext={() => actions.setPhase(2)} />}
+            {state.phase === 2 && <Phase2_Buster cleared={state.misunderstandingsCleared} onClear={actions.clearMisunderstanding} onNext={() => actions.setPhase(3)} />}
+            {state.phase === 3 && <Phase3_Check answers={state.checkSheetAnswers} onUpdate={actions.updateAnswer} onToggleDevice={actions.toggleDevice} onNext={() => actions.setPhase(4)} />}
+            {state.phase === 4 && <Phase4_Promo result={computed.calculateResult} answers={state.checkSheetAnswers} />}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ==========================================
+// Sub Components
+// ==========================================
+
+function AppHeader({ viewMode, currentPhase, onToggleView, onReset, onBack, progressII, progressI }) {
+  return (
+    <header className="fixed top-0 left-0 w-full z-50 transition-all duration-300">
+      <div className="absolute inset-0 bg-white/80 backdrop-blur-md shadow-sm border-b border-white/20"></div>
+      <div className="max-w-6xl mx-auto px-4 py-3 relative z-10">
+        <div className="flex justify-between items-center mb-2">
+          <div className="flex items-center gap-3">
+            {(viewMode === 'checklist' || (viewMode === 'wizard' && currentPhase > 1)) && (
+              <button 
+                onClick={viewMode === 'checklist' ? onToggleView : onBack} 
+                className="text-slate-400 hover:text-sky-600 transition-colors p-1 hover:bg-slate-100 rounded-full"
+                title="戻る"
+              >
+                <ArrowLeft size={20} />
+              </button>
+            )}
+            <h1 className="text-base md:text-xl font-bold bg-gradient-to-r from-sky-600 to-blue-600 bg-clip-text text-transparent truncate flex items-center gap-2">
+              {viewMode === 'checklist' ? (
+                <span className="flex items-center gap-2 text-slate-800"><ListTodo className="text-sky-500" /> 取得チェックリスト</span>
+              ) : (
+                <span className="flex items-center gap-2"><Sparkles className="text-yellow-400" /> 誤解バスター＆取得判定ナビ</span>
+              )}
+            </h1>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={onToggleView} 
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-all shadow-sm ${
+                viewMode === 'checklist' 
+                  ? 'bg-sky-50 text-sky-700 border border-sky-100 hover:bg-sky-100' 
+                  : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-300 hover:text-sky-600'
+              }`}
+            >
+              {viewMode === 'checklist' ? (
+                <> <Smartphone size={14} /> 診断に戻る </>
+              ) : (
+                <> <ListTodo size={14} /> チェックリスト </>
+              )}
+            </button>
+            
+            <button 
+              onClick={onReset} 
+              className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+            >
+              <RotateCcw size={14} /> TOP
+            </button>
+          </div>
+        </div>
+
+        {viewMode === 'checklist' && (
+          <div className="flex gap-6 pt-2 border-t border-slate-100/50 mt-2 animate-slide-down">
+            <div className="flex-1 group cursor-default">
+              <div className="flex justify-between items-end mb-1.5">
+                <span className="text-[10px] font-bold text-sky-600 tracking-wide uppercase">加算（Ⅱ）達成度</span>
+                <span className="text-sm font-black text-sky-600 font-mono">{progressII}%</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                <div 
+                  className="bg-gradient-to-r from-sky-400 to-blue-500 h-full rounded-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(14,165,233,0.3)]"
+                  style={{ width: `${progressII}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="flex-1 group cursor-default">
+                <div className="flex justify-between items-end mb-1.5">
+                <span className="text-[10px] font-bold text-orange-600 tracking-wide uppercase">加算（Ⅰ）達成度</span>
+                <span className="text-sm font-black text-orange-600 font-mono">{progressI}%</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                <div 
+                  className="bg-gradient-to-r from-orange-400 to-red-500 h-full rounded-full transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(249,115,22,0.3)]"
+                  style={{ width: `${progressI}%` }}
+                ></div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function DetailedChecklist({ data, checkedItems, onToggle, onGeneratePDF, isPdfReady, isGenerating }) {
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="animate-fade-in-up bg-white/90 backdrop-blur-sm shadow-xl rounded-3xl p-8 md:p-12 print:shadow-none print:p-0 border border-white/50">
+      <div className="flex justify-between items-start mb-10 border-b border-slate-100 pb-6 print:border-none">
+        <div className="flex-1">
+          <h2 className="text-3xl md:text-4xl font-black text-slate-800 mb-3 tracking-tight">
+            生産性向上推進体制加算<br className="md:hidden"/> <span className="text-sky-600">取得チェックリスト</span>
+          </h2>
+          <p className="text-base text-slate-500 print:text-black leading-relaxed">
+            厚生労働省の最新資料に基づいた完全ガイド。進捗を保存して管理できます。
+          </p>
+        </div>
+        
+        <div className="flex flex-col items-end gap-2">
+          <button 
+            onClick={onGeneratePDF}
+            disabled={!isPdfReady || isGenerating}
+            className={`px-6 py-3 rounded-2xl transition-all shadow-sm hover:shadow-md border ml-6 group flex items-center gap-2 ${
+              isPdfReady && !isGenerating
+                ? 'bg-slate-50 hover:bg-white text-slate-600 hover:text-sky-600 border-slate-100 cursor-pointer' 
+                : 'bg-slate-100 text-slate-400 cursor-not-allowed border-slate-100'
+            }`}
+            title="PDF出力"
+          >
+            {isGenerating ? (
+              <Loader2 size={20} className="animate-spin" />
+            ) : (
+              <Download size={20} className="group-hover:scale-110 transition-transform" />
+            )}
+            <span className="text-sm font-bold">{isGenerating ? '生成中...' : 'PDF作成'}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-10">
+        {data.map((section, sIdx) => (
+          <ChecklistSection 
+            key={sIdx} 
+            section={section} 
+            checkedItems={checkedItems} 
+            onToggle={onToggle} 
+          />
+        ))}
+      </div>
+
+      <div className="mt-16 pt-8 border-t border-slate-100 text-center">
+        <p className="text-base text-slate-400 leading-relaxed">
+          ※ 本リストの内容は最新の介護報酬改定情報に基づきますが、<br/>
+          正式な申請にあたっては必ず指定権者（自治体）の要件をご確認ください。
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ChecklistSection({ section, checkedItems, onToggle }) {
+  return (
+    <div className="break-inside-avoid">
+      <div className="relative pl-6 mb-6">
+        <div className="absolute left-0 top-1 bottom-1 w-1.5 bg-gradient-to-b from-sky-400 to-blue-500 rounded-full"></div>
+        <h3 className="font-bold text-2xl text-slate-800">{section.category}</h3>
+        {section.description && <p className="text-sm font-medium text-sky-600 mt-1">{section.description}</p>}
+      </div>
+      
+      <div className="space-y-4">
+        {section.items.map((item) => (
+          <ChecklistItem 
+            key={item.id} 
+            item={item} 
+            checkedItems={checkedItems} 
+            onToggle={onToggle} 
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChecklistItem({ item, checkedItems, onToggle }) {
+  const isChecked = checkedItems[item.id];
+
+  return (
+    <div className={`group relative transition-all duration-300 rounded-2xl border ${isChecked ? 'bg-sky-50/50 border-sky-100' : 'bg-white border-transparent hover:border-slate-100 hover:shadow-sm'}`}>
+      <div className="flex gap-5 items-start p-4">
+        <div className="pt-1 flex-shrink-0">
+          <button
+            onClick={() => onToggle(item.id)}
+            className={`w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all duration-300 ${
+              isChecked 
+                ? 'bg-sky-500 border-sky-500 text-white shadow-md scale-105' 
+                : 'bg-white border-slate-200 text-transparent hover:border-sky-300'
+            }`}
+          >
+            <Check size={20} strokeWidth={4} className={isChecked ? 'animate-check-pop' : ''} />
+          </button>
+        </div>
+        <div className="flex-1">
+          <div 
+            onClick={() => onToggle(item.id)}
+            className="cursor-pointer"
+          >
+            <h4 className={`font-bold text-lg mb-2 leading-snug transition-colors ${isChecked ? 'text-sky-800' : 'text-slate-800'}`}>
+              {item.label}
+            </h4>
+            <p className={`text-base leading-relaxed whitespace-pre-wrap transition-colors ${isChecked ? 'text-sky-700/80' : 'text-slate-600'}`}>
+              {item.detail}
+            </p>
+          </div>
+
+          {/* Sub Items */}
+          {item.subItems && (
+            <div className="mt-4 space-y-3 bg-white/50 rounded-xl p-4 border border-slate-100/50">
+              {item.subItems.map((subItem) => {
+                const isSubChecked = checkedItems[subItem.id];
+                return (
+                  <div key={subItem.id} className="flex gap-3 items-start group/sub">
+                     <button
+                      onClick={() => onToggle(subItem.id)}
+                      className={`mt-0.5 w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                        isSubChecked 
+                          ? 'bg-sky-400 border-sky-400 text-white' 
+                          : 'bg-white border-slate-200 hover:border-sky-300'
+                      }`}
+                    >
+                      {isSubChecked && <Check size={14} strokeWidth={4} />}
+                    </button>
+                    <div 
+                      onClick={() => onToggle(subItem.id)}
+                      className={`text-base cursor-pointer leading-relaxed transition-colors ${isSubChecked ? 'text-slate-400 line-through decoration-slate-300' : 'text-slate-700 group-hover/sub:text-sky-700'}`}
+                    >
+                      {subItem.text}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {item.source && (
+            <div className="flex items-center gap-1.5 mt-3 text-xs font-medium text-slate-400">
+              <FileText size={12} /> 
+              <span>出典: {item.source}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Phase1_Intro({ onNext }) {
+  return (
+    <div className="flex flex-col items-center text-center py-16 animate-fade-in-up">
+      <div className="relative mb-10 group">
+        <div className="absolute inset-0 bg-sky-200 rounded-full blur-2xl opacity-40 group-hover:opacity-60 transition-opacity duration-500"></div>
+        <div className="bg-gradient-to-br from-white to-sky-50 p-10 rounded-full shadow-2xl relative z-10 border border-white">
+          <AlertCircle size={80} className="text-sky-500 drop-shadow-sm" strokeWidth={1.5} />
+        </div>
+      </div>
+      
+      <h2 className="text-3xl md:text-5xl font-black text-slate-800 leading-tight mb-6 tracking-tight">
+        生産性向上加算、<br/>
+        <span className="bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">あきらめていませんか？</span>
+      </h2>
+      
+      <p className="text-lg md:text-xl font-bold text-red-500 bg-red-50 px-6 py-2 rounded-full mb-8 inline-block shadow-sm">
+        実は『誤解』だらけです。
+      </p>
+
+      <p className="text-slate-600 max-w-lg mx-auto text-base md:text-lg leading-relaxed mb-12">
+        「要件が難しそう」「現場が大変になりそう」...<br/>
+        そんな不安を、たった3分で解消します。<br/>
+        <span className="font-bold text-sky-600">あなたの事業所の「本当の可能性」</span>を見つけましょう。
+      </p>
+
+      <button 
+        onClick={onNext}
+        className="group relative bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold py-5 px-12 rounded-full shadow-[0_10px_20px_rgba(14,165,233,0.3)] hover:shadow-[0_15px_30px_rgba(14,165,233,0.4)] transform hover:-translate-y-1 transition-all duration-300 overflow-hidden"
+      >
+        <span className="relative z-10 flex items-center gap-3 text-lg">
+          誤解を晴らす <ChevronRight className="group-hover:translate-x-1 transition-transform" />
+        </span>
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-sky-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+      </button>
+    </div>
+  );
+}
+
+function Phase2_Buster({ cleared, onClear, onNext }) {
+  const allCleared = cleared.every(Boolean);
+
+  return (
+    <div className="animate-fade-in space-y-8 py-4">
+      <div className="text-center mb-10">
+        <h2 className="text-2xl md:text-3xl font-black text-slate-800 mb-3">3つの「誤解」を晴らしましょう</h2>
+        <p className="text-slate-500 font-medium">雲をタップして、隠れた真実を見つけてください</p>
+      </div>
+
+      <div className="space-y-5">
+        {QUESTIONS.map((q, index) => (
+          <div 
+            key={q.id} 
+            onClick={() => !cleared[index] && onClear(index)}
+            className={`relative overflow-hidden rounded-3xl transition-all duration-500 cursor-pointer h-40 md:h-36 group border ${
+              cleared[index] 
+                ? 'bg-gradient-to-br from-orange-50 to-white border-orange-100 shadow-md' 
+                : 'bg-white border-slate-100 hover:border-sky-200 shadow-lg hover:shadow-xl hover:-translate-y-1'
+            }`}
+          >
+            {/* Cloud (Overlay) */}
+            <div className={`absolute inset-0 flex flex-col items-center justify-center bg-slate-100/90 backdrop-blur-sm transition-all duration-700 z-10 p-6 ${
+              cleared[index] ? 'opacity-0 pointer-events-none translate-y-full' : 'opacity-100'
+            }`}>
+              <Cloud className="text-slate-400 mb-2 drop-shadow-md group-hover:scale-110 transition-transform duration-500" size={48} fill="white" />
+              <p className="font-bold text-slate-600 text-lg">{q.cloudText}</p>
+              <p className="text-xs text-slate-400 mt-2 font-bold uppercase tracking-widest">Tap to clear</p>
+            </div>
+
+            {/* Sun (Content) */}
+            <div className={`absolute inset-0 flex items-center p-6 md:p-8 transition-all duration-500 delay-100 ${
+              cleared[index] ? 'opacity-100 scale-100' : 'opacity-50 scale-95'
+            }`}>
+              <div className="flex items-start gap-5">
+                <div className="bg-orange-100 p-3 rounded-full flex-shrink-0 text-orange-500">
+                  <Sun size={28} className="animate-spin-slow" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-orange-600 text-xl mb-1">{q.sunText}</h3>
+                  <p className="text-sm text-slate-600 leading-relaxed font-medium">{q.detail}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="h-24 flex items-center justify-center">
+        {allCleared ? (
+          <div className="animate-bounce-in text-center">
+            <p className="text-sky-600 font-bold mb-4 animate-pulse">すべての誤解が解けました！</p>
+            <button 
+              onClick={onNext}
+              className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 text-white font-bold py-4 px-10 rounded-full shadow-lg shadow-orange-200 flex items-center gap-2 mx-auto transform hover:scale-105 transition-all"
+            >
+              取得可能性をチェック <ChevronRight />
+            </button>
+          </div>
+        ) : (
+          <div className="text-slate-300 text-sm font-medium flex items-center gap-2">
+            <Clock size={16} /> 残りの誤解: {cleared.filter(c => !c).length}つ
+          </div>
+        )}
+      </div>
+
+      <div className="bg-blue-50/80 border border-blue-100 p-6 rounded-2xl text-sm text-slate-600 leading-relaxed flex gap-4 items-start">
+        <div className="bg-blue-200 text-blue-700 p-1.5 rounded-full mt-0.5"><Check size={16} strokeWidth={3}/></div>
+        <div>
+          <h4 className="font-bold text-blue-800 mb-1 text-base">ステップアップが基本です</h4>
+          いきなり高い目標を掲げる必要はありません。国も「まずは加算（Ⅱ）で慣れてから、加算（Ⅰ）へ」という段階的な取り組みを推奨しています。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Phase3_Check({ answers, onUpdate, onToggleDevice, onNext }) {
+  const isComplete = answers.serviceType !== null && answers.wifi !== null;
+  const [showServiceList, setShowServiceList] = useState(false);
+
+  return (
+    <div className="animate-fade-in space-y-10 py-6 relative">
+      <div className="text-center mb-8">
+        <h2 className="text-2xl md:text-3xl font-black text-slate-800 mb-2">取得可能性チェック</h2>
+        <p className="text-slate-500 font-medium">3つの質問で、あなたの事業所のポテンシャルを判定</p>
+      </div>
+
+      {/* Q1 */}
+      <div className="bg-white p-8 rounded-3xl shadow-lg shadow-slate-200/50 border border-slate-100 relative group hover:border-sky-100 transition-colors">
+        <div className="flex justify-between items-start mb-6">
+          <h3 className="font-bold text-xl text-slate-800 flex items-center gap-3">
+            <span className="bg-sky-100 text-sky-600 w-8 h-8 rounded-xl flex items-center justify-center text-sm font-black shadow-inner">1</span>
+            対象サービスですか？
+          </h3>
+          <button 
+            onClick={() => setShowServiceList(true)}
+            className="text-sky-500 hover:text-sky-600 hover:bg-sky-50 p-2 rounded-full transition-all"
+            aria-label="詳細"
+          >
+            <HelpCircle size={20} />
+          </button>
+        </div>
+        
+        <div className="flex gap-4">
+          <SelectionButton 
+            selected={answers.serviceType === true} 
+            onClick={() => onUpdate('serviceType', true)} 
+            label="はい" 
+          />
+          <SelectionButton 
+            selected={answers.serviceType === false} 
+            onClick={() => onUpdate('serviceType', false)} 
+            label="いいえ" 
+          />
+        </div>
+      </div>
+
+      {/* Q2 */}
+      <div className="bg-white p-8 rounded-3xl shadow-lg shadow-slate-200/50 border border-slate-100 hover:border-sky-100 transition-colors">
+        <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-3">
+          <span className="bg-sky-100 text-sky-600 w-8 h-8 rounded-xl flex items-center justify-center text-sm font-black shadow-inner">2</span>
+          施設内にWi-Fi環境がありますか？
+        </h3>
+        <div className="flex gap-4">
+          <SelectionButton 
+            selected={answers.wifi === true} 
+            onClick={() => onUpdate('wifi', true)} 
+            label="はい" 
+          />
+          <SelectionButton 
+            selected={answers.wifi === false} 
+            onClick={() => onUpdate('wifi', false)} 
+            label="いいえ" 
+          />
+        </div>
+      </div>
+
+      {/* Q3 */}
+      <div className="bg-white p-8 rounded-3xl shadow-lg shadow-slate-200/50 border border-slate-100 hover:border-sky-100 transition-colors">
+        <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-3">
+          <span className="bg-sky-100 text-sky-600 w-8 h-8 rounded-xl flex items-center justify-center text-sm font-black shadow-inner">3</span>
+          導入済み・予定の機器（複数選択）
+        </h3>
+        <div className="space-y-4">
+          {[
+            { key: 'sensor', label: '見守り機器（センサー等）', icon: <CheckCircle2 size={20}/> },
+            { key: 'income', label: 'インカム（スマホチャット含）', icon: <Smartphone size={20}/> },
+            { key: 'record', label: '介護記録ソフト（Smile One等）', icon: <ClipboardCheck size={20}/> },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={() => onToggleDevice(item.key)}
+              className={`w-full text-left p-5 rounded-2xl border-2 flex items-center justify-between transition-all duration-200 ${
+                answers.devices[item.key] 
+                  ? 'border-sky-500 bg-sky-50 text-sky-800 shadow-md ring-2 ring-sky-200 ring-offset-2' 
+                  : 'border-slate-100 bg-slate-50 text-slate-500 hover:bg-white hover:border-slate-300'
+              }`}
+            >
+              <span className="font-bold flex items-center gap-3">{item.icon} {item.label}</span>
+              {answers.devices[item.key] && (
+                <span className="bg-sky-500 text-white rounded-full p-1 animate-check-pop">
+                  <Check size={14} strokeWidth={4} />
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="text-center pt-6 pb-8">
+        <button 
+          onClick={onNext}
+          disabled={!isComplete}
+          className={`w-full md:w-auto py-5 px-16 rounded-full font-bold shadow-xl text-lg flex items-center gap-3 justify-center mx-auto transition-all transform ${
+            isComplete 
+              ? 'bg-gradient-to-r from-sky-600 to-blue-700 text-white hover:scale-105 hover:shadow-2xl' 
+              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+          }`}
+        >
+          診断結果を見る <ChevronRight />
+        </button>
+      </div>
+
+      {/* Service List Modal */}
+      {showServiceList && (
+        <ServiceListModal onClose={() => setShowServiceList(false)} />
+      )}
+    </div>
+  );
+}
+
+function SelectionButton({ selected, onClick, label }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={`flex-1 py-4 rounded-xl border-2 font-bold transition-all duration-200 transform ${
+        selected 
+          ? 'border-sky-500 bg-sky-500 text-white shadow-lg scale-105 ring-4 ring-sky-100' 
+          : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ServiceListModal({ onClose }) {
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[80vh] overflow-hidden flex flex-col scale-100 animate-pop-in" onClick={e => e.stopPropagation()}>
+        <div className="bg-slate-50 border-b p-5 flex justify-between items-center flex-shrink-0">
+          <h3 className="font-bold text-xl text-slate-800">対象サービス一覧</h3>
+          <button onClick={onClose} className="bg-white p-2 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 space-y-8 overflow-y-auto">
+          {TARGET_SERVICES.map((section, idx) => (
+            <div key={idx}>
+              <h4 className="font-bold text-sky-700 mb-3 pb-2 border-b border-sky-100 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-sky-500 rounded-full"></span>
+                {section.category}
+              </h4>
+              <ul className="space-y-2">
+                {section.items.map((item, i) => (
+                  <li key={i} className="text-sm text-slate-600 pl-4 border-l-2 border-slate-100 hover:border-sky-200 transition-colors">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Phase4_Promo({ result, answers }) {
+  const resultData = {
+    S: {
+      gradient: 'from-orange-400 to-red-500',
+      shadow: 'shadow-orange-200',
+      icon: <Sparkles className="text-yellow-200 w-12 h-12 mb-2 animate-pulse" />,
+      title: '判定S：加算（Ⅰ）候補',
+      message: 'おめでとうございます！最高ランクの『加算（Ⅰ）』（月100単位）を狙えるポテンシャルがあります！',
+    },
+    A: {
+      gradient: 'from-sky-400 to-blue-500',
+      shadow: 'shadow-blue-200',
+      icon: <CheckCircle2 className="text-blue-200 w-12 h-12 mb-2" />,
+      title: '判定A：加算（Ⅱ）候補',
+      message: '準備は整っています！まずは『加算（Ⅱ）』（月10単位）からスタートして、体制を作りましょう。',
+    },
+    B: {
+      gradient: 'from-slate-400 to-slate-600',
+      shadow: 'shadow-slate-200',
+      icon: <CornerDownRight className="text-slate-300 w-12 h-12 mb-2" />,
+      title: '判定B：準備フェーズ',
+      message: '残念です。お客様の事業所は対象外です。',
+    }
+  };
+
+  const currentResult = resultData[result];
+  const isTargetB = result === 'B';
+  const hasRecord = answers?.devices?.record;
+
+  return (
+    <div className="animate-fade-in pb-12 pt-4">
+      {/* Result Card */}
+      <div className={`relative bg-gradient-to-br ${currentResult.gradient} text-white p-10 rounded-[2.5rem] shadow-2xl ${currentResult.shadow} text-center mb-12 transform transition-all duration-1000 translate-y-0 overflow-hidden`}>
+        <div className="absolute top-0 left-0 w-full h-full bg-white/10 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-white/30 via-transparent to-transparent"></div>
+        <div className="relative z-10 flex flex-col items-center">
+          {currentResult.icon}
+          <h2 className="text-3xl md:text-4xl font-black mb-4 drop-shadow-md tracking-tight">{currentResult.title}</h2>
+          <div className="w-16 h-1 bg-white/30 rounded-full mb-6"></div>
+          <p className="text-lg md:text-xl font-medium leading-relaxed opacity-95 max-w-xl">{currentResult.message}</p>
+        </div>
+      </div>
+
+      {/* Pain Point */}
+      <div className="bg-slate-800 text-slate-100 p-8 md:p-10 rounded-3xl shadow-xl mb-10 relative overflow-hidden group">
+        <div className="absolute -top-10 -right-10 p-4 opacity-5 group-hover:opacity-10 transition-opacity duration-700">
+          <Clock size={200} />
+        </div>
+        
+        <h3 className="text-xl md:text-2xl font-bold mb-6 flex items-center gap-3 text-yellow-400">
+          <AlertCircle className="fill-yellow-400 text-slate-800" /> 
+          {isTargetB ? '業務改善の第一歩として' : 'ただし、注意点があります'}
+        </h3>
+
+        <div className="space-y-4 relative z-10 text-base md:text-lg text-slate-300 leading-relaxed">
+          {isTargetB ? (
+            <>
+              <p>
+                加算対象外でも、本質的な業務改善を進めるには<strong className="text-white bg-white/10 px-2 py-0.5 rounded mx-1">『現状の可視化』</strong>が不可欠です。
+              </p>
+              <p>
+                具体的には、ムリ・ムダを特定する<strong className="text-white border-b-2 border-yellow-400 mx-1">『タイムスタディ調査』</strong>が有効です。<br/>
+                しかし、これを手作業で集計するのは、現場にとって過酷な作業です…。
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                上位の加算（Ⅰ）を取るには<strong className="text-white bg-white/10 px-2 py-0.5 rounded mx-1">「成果の証明」</strong>が必須です。
+              </p>
+              <p>
+                具体的には、紙とストップウォッチを使った<strong className="text-white border-b-2 border-yellow-400 mx-1">「タイムスタディ調査」</strong>が必要です。<br/>
+                これを手作業で集計するのは、現場にとって過酷な作業です…。
+              </p>
+            </>
+          )}
+
+          {/* Conditional message about Record Software */}
+          {!hasRecord && !isTargetB && (
+             <div className="mt-6 pt-6 border-t border-slate-700/50">
+                <p className="text-yellow-200 font-bold mb-2 flex items-center gap-2">
+                    <AlertCircle size={20} /> 介護記録ソフトの導入も必要です
+                </p>
+                <p className="text-slate-300 text-sm leading-relaxed">
+                    加算取得には、転記不要で記録・情報共有・請求を一元管理できる<strong className="text-white border-b border-yellow-400 mx-1">「介護記録ソフト」</strong>の導入が必須要件となります。
+                </p>
+             </div>
+          )}
+        </div>
+      </div>
+
+      {/* New Product Section if no record software */}
+      {!hasRecord && (
+        <div className="bg-gradient-to-br from-orange-50 to-white border border-orange-100 p-8 md:p-12 rounded-[2.5rem] shadow-2xl text-center relative overflow-hidden mb-12">
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-400 to-pink-500"></div>
+            <div className="inline-block bg-orange-500 text-white text-xs font-bold px-4 py-1.5 rounded-full mb-6 tracking-wide shadow-md shadow-orange-200">
+              記録・請求業務を劇的に効率化
+            </div>
+            <h3 className="text-3xl md:text-4xl font-black text-slate-800 mb-8 tracking-tight">
+              Smile One <span className="text-slate-400 text-2xl mx-1">&</span> Smile Web+
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-left">
+              <div className="bg-white p-6 rounded-2xl border border-orange-100 shadow-sm flex items-start gap-4">
+                <div className="bg-orange-100 p-3 rounded-xl text-orange-500">
+                  <Tablet size={24} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-700 mb-1">音声入力＆タブレット</h4>
+                  <p className="text-sm text-slate-500">直感的な操作で、現場の記録負担を大幅軽減。転記ゼロへ。</p>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-orange-100 shadow-sm flex items-start gap-4">
+                <div className="bg-pink-100 p-3 rounded-xl text-pink-500">
+                  <Monitor size={24} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-700 mb-1">請求連動＆LINE連携</h4>
+                  <p className="text-sm text-slate-500">記録から請求まで一気通貫。家族との連携もスムーズに。</p>
+                </div>
+              </div>
+            </div>
+
+            <button className="w-full bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-400 hover:to-pink-400 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 transition transform hover:-translate-y-1 flex items-center justify-center gap-2">
+              Smileシリーズの詳細を見る <ChevronRight size={20} />
+            </button>
+        </div>
+      )}
+
+      {/* Solution (Gain) */}
+      <div className="bg-white border border-indigo-50 p-8 md:p-12 rounded-[2.5rem] shadow-2xl text-center relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+        
+        <div className="inline-block bg-indigo-600 text-white text-xs font-bold px-4 py-1.5 rounded-full mb-6 tracking-wide shadow-md shadow-indigo-200">
+          現場の負担ゼロへ
+        </div>
+        <h3 className="text-3xl md:text-4xl font-black text-slate-800 mb-4 tracking-tight">カンタン・タイムスタディ（仮）</h3>
+        <p className="text-slate-500 mb-10 text-lg">スマホでタップするだけ。集計・報告まで全自動。</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 text-left">
+          <FeatureCard icon={<Smartphone className="text-white" size={24}/>} title="スマホで完結" desc="ストップウォッチ不要" color="bg-indigo-500" />
+          <FeatureCard icon={<BarChart3 className="text-white" size={24}/>} title="自動グラフ化" desc="エクセル入力ゼロ" color="bg-purple-500" />
+          <FeatureCard icon={<ClipboardCheck className="text-white" size={24}/>} title="一発出力" desc="厚労省報告対応" color="bg-pink-500" />
+        </div>
+
+        <div className="space-y-4 max-w-md mx-auto">
+          <button className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-5 rounded-2xl shadow-xl shadow-indigo-200 transition transform hover:-translate-y-1 hover:shadow-2xl text-lg">
+            アプリの無料体験版を試す
+          </button>
+          <button className="w-full bg-white hover:bg-slate-50 text-indigo-600 border-2 border-indigo-100 hover:border-indigo-200 font-bold py-4 rounded-2xl transition">
+            詳しい資料をダウンロード
+          </button>
+        </div>
+        
+        <p className="mt-8 text-xs text-slate-400 font-medium">
+          ※ 外部サイトへ移動します
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FeatureCard({ icon, title, desc, color }) {
+  return (
+    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 hover:bg-white hover:shadow-lg transition-all duration-300 group">
+      <div className={`${color} w-12 h-12 rounded-xl flex items-center justify-center mb-4 shadow-md group-hover:scale-110 transition-transform`}>
+        {icon}
+      </div>
+      <h4 className="font-bold text-slate-700 text-base mb-1">{title}</h4>
+      <p className="text-sm text-slate-500">{desc}</p>
+    </div>
+  );
+}
